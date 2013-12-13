@@ -1,31 +1,18 @@
-requireApp('clock/test/unit/mocks/mock_shared/js/lazy_loader.js');
-
-// database.js has a dependency on utils.js. Since database.js is planned to
-// be shared across Gaia, it is not defined as a AMD module, and the `Utils`
-// object must be available in the global scope.
 suite('Database Test', function() {
 
-  var ll = window.LazyLoader;
-  var Utils;
-  var Database, SchemaVersion;
-  window.LazyLoader = window.LazyLoader || {};
+  var Utils, Database, SchemaVersion;
 
   suiteSetup(function(done) {
-    LazyLoader = MockLazyLoader;
-    testRequire(['utils', 'database'], function(rUtils, db) {
-      Utils = rUtils;
-      Database = db.Database;
-      SchemaVersion = db.SchemaVersion;
+    testRequire(['utils', 'database'],
+      { mocks: [] },
+      function(utils, database) {
+
+      Utils = utils;
+      SchemaVersion = database.SchemaVersion;
+      Database = database.Database;
+
       done();
     });
-  });
-
-  suiteTeardown(function() {
-    if (typeof ll === 'undefined') {
-      delete window.LazyLoader;
-    } else {
-      LazyLoader = ll;
-    }
   });
 
   suite('Database creation', function() {
@@ -120,7 +107,7 @@ suite('Database Test', function() {
 
     test('Get a connection fails with no schemas', function(done) {
       db.connect(function(err, conn) {
-        assert.ok(err);
+        assert.ok(err, err.message);
         assert.ok(!conn);
         done();
       });
@@ -395,6 +382,7 @@ suite('Database Test', function() {
     test('Get a connection non-existent initializes correctly', function(done) {
       createSchema();
       db.connect(function(err, conn) {
+        assert.ok(!err);
         assert.deepEqual(Array.prototype.slice.call(conn.objectStoreNames)
           .sort(),
           [db.effectiveVersionName, 'objA', 'objB'].sort());

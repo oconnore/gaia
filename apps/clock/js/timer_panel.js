@@ -103,6 +103,15 @@ Timer.Panel = function(element) {
 
 Timer.Panel.prototype = Object.create(Panel.prototype);
 
+Timer.Panel.prototype.tick = function(rafTime) {
+  if (typeof rafTime === 'undefined') {
+    rafTime = Date.now();
+  }
+  this.timer.emit('tick', this.timer.secondsRemaining());
+  Utils.requestAnimationAfter(this.tick.bind(this),
+    1000 - (Date.now() - this.timer.start) % 1000);
+};
+
 Timer.Panel.prototype.onvisibilitychange = function(isVisible) {
   var nodes = this.nodes;
   var timer = this.timer;

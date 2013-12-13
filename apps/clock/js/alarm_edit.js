@@ -252,9 +252,13 @@ var AlarmEdit = {
     this.alarm.snooze = parseInt(this.getSnoozeSelect(), 10);
 
     if (!error) {
+      Utils.debug('error inside edit.save', error, error && error.message);
       this.alarm.cancel();
+      Utils.debug('canceled existing');
       this.alarm.setEnabled(true, function(err, alarm) {
+        Utils.debug('setEnabled callback', err, alarm);
         if (err) {
+          Utils.debug('err inside setEnabled', err, err && err.message);
           callback && callback(err, alarm);
           return;
         }

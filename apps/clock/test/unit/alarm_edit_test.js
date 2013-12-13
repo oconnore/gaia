@@ -2,7 +2,8 @@ mocha.setup({ globals: ['GestureDetector'] });
 
 suite('AlarmEditView', function() {
   var nativeMozAlarms = navigator.mozAlarms;
-  var Alarm, AlarmEdit, ActiveAlarm, AlarmsDB, AlarmList, AlarmManager;
+  var Alarm, AlarmEdit, ActiveAlarm, AlarmList, AlarmManager, Database;
+  var db;
 
   suiteSetup(function(done) {
     this.slow(25000);
@@ -11,21 +12,25 @@ suite('AlarmEditView', function() {
         'alarm',
         'active_alarm',
         'alarm_edit',
-        'mocks/mock_alarmsdb',
-        'mocks/mock_alarm_list',
-        'mocks/mock_alarm_manager',
-        'mocks/mock_moz_alarm',
-        'mocks/mock_navigator_mozl10n'
+        'alarm_list',
+        'alarm_manager',
+        'database',
+        'mocks/mock_moz_alarm'
       ], {
-        mocks: ['alarmsdb', 'alarm_list', 'alarm_manager']
-      }, function(alarm, activeAlarm, alarmEdit, mockAlarmsDB, mockAlarmList,
-        mockAlarmManager, mockMozAlarms) {
+        mocks: ['database', 'alarm_list', 'alarm_manager', 'l10n']
+      }, function(alarm, activeAlarm, alarmEdit, mockAlarmList,
+                  mockAlarmManager, mockDatabase, mockMozAlarms) {
         Alarm = alarm;
         ActiveAlarm = activeAlarm;
         AlarmEdit = alarmEdit;
-        AlarmsDB = mockAlarmsDB;
+
+        Database = mockDatabase.Database;
         AlarmList = mockAlarmList;
         AlarmManager = mockAlarmManager;
+
+        db = Database.singleton({ name: 'clock-app' });
+        db.createObjectStore('alarms', { keyPath: 'id', autoincrement: true });
+
         navigator.mozAlarms = new mockMozAlarms.MockMozAlarms(
           ActiveAlarm.handler
         );
@@ -37,12 +42,17 @@ suite('AlarmEditView', function() {
     loadBodyHTML('/index.html');
   });
 
+  suiteTeardown(function() {
+    navigator.mozAlarms = nativeMozAlarms;
+  });
+
   setup(function() {
     this.sinon.stub(ActiveAlarm.singleton(), 'handler');
   });
 
   suiteTeardown(function() {
     navigator.mozAlarms = nativeMozAlarms;
+    delete navigator.mozL10n;
   });
 
   suite('Alarm persistence', function() {
@@ -59,10 +69,10 @@ suite('AlarmEditView', function() {
       };
       AlarmEdit.element.dataset.id = alarm.id;
 
-      // Store to alarmsdb
-      AlarmsDB.alarms.clear();
-      AlarmsDB.alarms.set(alarm.id, alarm);
-      AlarmsDB.idCount = 43;
+      // Store to mocked Database
+      db.mockClear({ data: true });
+      db.stores.get('alarms').set(alarm.id, alarm);
+      db.meta.get('alarms').id = 43;
 
       // shim the edit alarm view
       delete AlarmEdit.labelInput;
@@ -129,7 +139,7 @@ suite('AlarmEditView', function() {
     test('should save an alarm, existing id', function(done) {
       this.sinon.stub(AlarmList, 'refreshItem');
       this.sinon.stub(AlarmList.banner, 'show');
-      var curid = AlarmsDB.idCount++;
+      var curid = db.meta.get('alarms').id++;
       AlarmEdit.alarm = new Alarm({
         id: curid,
         hour: 5,
@@ -162,12 +172,12 @@ suite('AlarmEditView', function() {
       var called = false;
       this.sinon.stub(AlarmList, 'refresh');
 
-      this.sinon.stub(AlarmEdit.alarm, 'delete', function(callback) {
-        callback(null, AlarmEdit.alarm);
-      });
+      this.sinon.spy(AlarmEdit.alarm, 'delete');
 
       AlarmEdit.delete(function(err, alarm) {
         assert.ok(!err, 'delete reported error');
+        assert.ok(AlarmEdit.alarm.delete.calledOnce);
+        assert.ok(!db.stores.get('alarms').has(alarm.id));
         assert.ok(AlarmList.refresh.calledOnce);
         assert.ok(AlarmManager.updateAlarmStatusBar.calledOnce);
         called = true;
@@ -175,7 +185,7 @@ suite('AlarmEditView', function() {
       });
       this.sinon.clock.tick(10);
       if (!called) {
-        done('was not called');
+        done(new Error('was not called'));
       }
     });
 
@@ -185,7 +195,7 @@ suite('AlarmEditView', function() {
       // mock the view to turn off vibrate
       AlarmEdit.getVibrateSelect.returns('0');
 
-      var curid = AlarmsDB.idCount;
+      var curid = db.meta.get('alarms').id;
       AlarmEdit.alarm = new Alarm({
         hour: 5,
         minute: 17,
@@ -195,13 +205,15 @@ suite('AlarmEditView', function() {
       });
       AlarmEdit.element.dataset.id = null;
 
-      this.sinon.stub(AlarmEdit.alarm, 'setEnabled', function(val, callback) {
-        callback(null, AlarmEdit.alarm);
-      });
+      this.sinon.spy(AlarmEdit.alarm, 'setEnabled');
 
       AlarmEdit.save(function(err, alarm) {
         assert.ok(AlarmList.refreshItem.calledOnce);
-        done();
+        Alarm.db.request(alarm.id, function(err, alarm) {
+          assert.equal(alarm.vibrate, 0);
+          assert.notEqual(alarm.sound, 0);
+          done();
+        });
       });
       this.sinon.clock.tick(10);
     });
@@ -221,7 +233,7 @@ suite('AlarmEditView', function() {
       AlarmEdit.save(function(err, alarm) {
         assert.ok(alarm.id);
         assert.ok(AlarmList.refreshItem.calledOnce);
-        AlarmsDB.getAlarm(alarm.id, function(err, alarm) {
+        Alarm.db.request(alarm.id, function(err, alarm) {
           assert.equal(alarm.vibrate, 1);
           assert.equal(alarm.sound, 0);
           done();

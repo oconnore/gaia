@@ -2,17 +2,30 @@ mocha.setup({ globals: ['GestureDetector'] });
 
 suite('Alarm Test', function() {
 
-  var Alarm, ActiveAlarm;
+  var Alarm, ActiveAlarm, Database, db;
   var nativeMozAlarms = navigator.mozAlarms;
 
   suiteSetup(function(done) {
-    testRequire(['alarm', 'active_alarm', 'mocks/mock_moz_alarm'],
-      function(alarm, activeAlarm, mockMozAlarms) {
+    testRequire([
+        'alarm',
+        'active_alarm',
+        'mocks/mock_database',
+        'mocks/mock_moz_alarm'
+      ], {
+        mocks: ['alarm_list', 'alarm_manager', 'database', 'l10n']
+      },
+      function(alarm, activeAlarm, mockDatabase,
+               mockMozAlarms) {
         Alarm = alarm;
         ActiveAlarm = activeAlarm;
+        console.log(mockMozAlarms);
         navigator.mozAlarms = new mockMozAlarms.MockMozAlarms(
           ActiveAlarm.handler
         );
+
+        Database = mockDatabase.Database;
+        db = Database.singleton({ name: 'clock-app' });
+        db.createObjectStore('alarms', { keyPath: 'id', autoincrement: true });
 
         done();
       }

@@ -2,7 +2,7 @@ define(function(require) {
 'use strict';
 
 var Banner = require('banner');
-var AlarmsDB = require('alarmsdb');
+var Alarm = require('alarm');
 var AlarmManager = require('alarm_manager');
 var Utils = require('utils');
 var Template = require('shared/js/template');
@@ -45,6 +45,7 @@ var AlarmList = {
       this.alarmEditView();
       evt.preventDefault();
     } else if (link.classList.contains('input-enable')) {
+      Utils.debug('click event', link.dataset.id);
       this.toggleAlarmEnableState(link.checked,
         this.getAlarmFromList(parseInt(link.dataset.id, 10)));
     } else if (link.classList.contains('alarm-item')) {
@@ -70,7 +71,7 @@ var AlarmList = {
   },
 
   refresh: function al_refresh() {
-    AlarmsDB.getAlarmList(function al_gotAlarmList(err, list) {
+    Alarm.db.getList({ iter: 'next' }, function al_gotAlarmList(err, list) {
       if (!err) {
         this.fillList(list);
       } else {
@@ -80,13 +81,14 @@ var AlarmList = {
   },
 
   render: function al_render(alarm) {
+    Utils.debug('inside render ->',
+      alarm, (alarm.toSerializable) ? alarm.toSerializable() : null,
+      alarm.registeredAlarms);
     var repeat = alarm.isRepeating() ?
       alarm.summarizeDaysOfWeek() : '';
     var withRepeat = alarm.isRepeating() ? ' with-repeat' : '';
-    // Because `0` is a valid value for these attributes, check for their
-    // presence with the `in` operator.
-    var isActive = 'normal' in alarm.registeredAlarms ||
-      'snooze' in alarm.registeredAlarms;
+    var isActive = typeof alarm.registeredAlarms.normal !== 'undefined' ||
+      typeof alarm.registeredAlarms.snooze !== 'undefined';
     var checked = !!isActive ? 'checked=true' : '';
 
     var d = new Date();
@@ -145,6 +147,8 @@ var AlarmList = {
       this.alarmList.sort(function(a, b) {
         return a.id - b.id;
       });
+      Utils.debug('alarm in refreshItem',
+        alarm, alarm.toSerializable());
       this.createItem(alarm, this.alarms);
     } else {
       this.setAlarmFromList(id, alarm);
@@ -173,11 +177,17 @@ var AlarmList = {
       return a.id - b.id;
     }).forEach(function al_fillEachList(alarm) {
       // prepend the rendered alarm to the alarm list
+      Utils.debug('alarm in fillList',
+        alarm, alarm.toSerializable());
       this.createItem(alarm, this.alarms);
     }.bind(this));
   },
 
   getAlarmFromList: function al_getAlarmFromList(id) {
+    Utils.debug('get alarm from list',
+      id, this.alarmList, this.alarmList.map(function(x) {
+      return x.toSerializable();
+    }));
     for (var i = 0; i < this.alarmList.length; i++) {
       if (this.alarmList[i].id === id)
         return this.alarmList[i];

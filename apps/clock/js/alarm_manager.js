@@ -5,7 +5,7 @@ define(function(require) {
  *                                              type: 'normal' or 'snooze'
  *
  *
- * An alarm has its own id in the Clock app's indexDB(alarmsdb.js).
+ * An alarm has its own id in the Clock app's indexDB.
  * In order to maintain(add,remove) an alarm by mozAlarms API,
  * we prepare an registeredAlarms object that contains each alarm type:
  * 'snooze' and 'normal'
@@ -56,7 +56,7 @@ define(function(require) {
  */
 
 var Utils = require('utils');
-var AlarmsDB = require('alarmsdb');
+var Alarm = require('alarm');
 
 var AlarmManager = {
 
@@ -81,7 +81,7 @@ var AlarmManager = {
         if (!data.id || ['alarm', 'snooze'].indexOf(data.type) === -1) {
           return;
         }
-        AlarmsDB.getAlarm(data.id,
+        Alarm.db.request(data.id,
           (function(mozAlarm, doneCb) {
           return function(err, alarm) {
             if (!err) {
@@ -90,10 +90,13 @@ var AlarmManager = {
                   hasAlarmEnabled = true;
                 }
               }
-            }
-            doneCb();
-          };
-        })(e.target.result[i], generator()));
+              doneCb();
+            };
+          })(e.target.result[i], generator()));
+        } else if (e.target.result[i].id) {
+          // remove extraneous alarm
+          navigator.mozAlarms.remove(e.target.result[i].id);
+        }
       }
       endCb();
     };

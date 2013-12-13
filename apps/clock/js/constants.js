@@ -22,4 +22,12 @@ define(function(require, exports) {
     return DAYS[x];
   });
 
+  var DB_OPTIONS = exports.DB_OPTIONS = {
+    name: 'clock-app',
+    version: 1,
+    schemas: [
+      'db/schema_1'
+    ]
+  };
+
 });

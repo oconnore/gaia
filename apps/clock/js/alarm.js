@@ -2,7 +2,7 @@ define(function(require, exports, module) {
 
   'use strict';
 
-  var AlarmsDB = require('alarmsdb');
+  var Database = require('database').Database;
   var Utils = require('utils');
   var constants = require('constants');
   var mozL10n = require('l10n');
@@ -22,17 +22,66 @@ define(function(require, exports, module) {
   var repeatMap = protectedProperties.get('repeat');
   var registeredAlarmsMap = protectedProperties.get('registeredAlarms');
 
+  var databaseName = 'clock-app';
+  var store = 'alarms';
+
   // ---------------------------------------------------------
   // Alarm Object
+
+  function DefaultAlarmOptions() {
+    this.registeredAlarms = {};
+    this.repeat = {};
+    var now = new Date();
+    this.hour = now.getHours();
+    this.minute = now.getMinutes();
+    this.label = '';
+    this.sound = 'ac_classic_clock_alarm.opus';
+    this.vibrate = 1;
+    this.snooze = 5;
+    this.color = 'Darkorange';
+  }
 
   function Alarm(config) {
     if (config instanceof Alarm) {
       config = config.toSerializable();
     }
-    var econfig = Utils.extend(this.defaultProperties(), config || {});
+    var econfig = Utils.extend(new DefaultAlarmOptions(), config || {});
     this.extractProtected(econfig);
     Utils.extend(this, econfig);
   }
+
+  Alarm.db = {
+
+    getList: function(options, callback) {
+      var database = Database.singleton({ name: databaseName });
+      if (arguments.length === 1 && typeof arguments[0] === 'function') {
+        callback = arguments[0];
+        options = {};
+      }
+      database.alist(store, options.iter,
+        function(err, list) {
+        var res;
+        if (!err) {
+          res = list.map(function(x) {
+            return new Alarm(x[1]);
+          });
+        }
+        callback && callback(err, res);
+      });
+    },
+
+    request: function ad_request(key, callback) {
+      var database = Database.singleton({ name: databaseName });
+      database.request(store, key, function(err, obj) {
+        if (err || obj) {
+          callback && callback(err, obj && new Alarm(obj));
+        } else {
+          callback && callback(new Error('key not found'));
+        }
+      });
+    }
+
+  };
 
   Alarm.prototype = {
 
@@ -245,7 +294,9 @@ define(function(require, exports, module) {
 
     setEnabled: function alarm_setEnabled(value, callback) {
       if (value) {
+        Utils.debug('setEnabled with true', value);
         var scheduleWithID = function(err, alarm) {
+          Utils.debug('scheduling', err, alarm);
           this.schedule({
             type: 'normal',
             first: true
@@ -260,16 +311,19 @@ define(function(require, exports, module) {
           setTimeout(scheduleWithID.bind(this, null, this), 0);
         }
       } else if (this.enabled) {
+        Utils.debug('setEnabled with false, disable', value);
         this.cancel();
         this.save(callback);
       } else if (callback) {
+        Utils.debug('setEnabled do nothing', value);
         setTimeout(callback.bind(undefined, null, this), 0);
       }
     },
 
     delete: function alarm_delete(callback) {
       this.cancel();
-      AlarmsDB.deleteAlarm(this.id,
+      var db = Database.singleton({ name: 'clock-app' });
+      db.delete(store, this.id,
         function alarm_innerDelete(err, alarm) {
         callback(err, this);
       }.bind(this));
@@ -291,9 +345,16 @@ define(function(require, exports, module) {
     },
 
     save: function alarm_save(callback) {
-      AlarmsDB.putAlarm(this, function(err, alarm) {
+      Utils.debug('saving alarm', typeof callback);
+      var db = Database.singleton({ name: 'clock-app' });
+      db.put(store, this.toSerializable(), function(err, alarm) {
+        Utils.debug('alarm.save -> db.put alarm', err, alarm);
+        if (err) {
+          callback && callback(err);
+          return;
+        }
         idMap.set(this, alarm.id);
-        callback && callback(err, this);
+        callback && callback(null, this);
       }.bind(this));
     },
 

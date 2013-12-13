@@ -1,33 +1,35 @@
 suite('AlarmList', function() {
-  var nml, nma, fixture, dom;
-  var AlarmList, Alarm;
+  var nativeMozAlarms = navigator.mozAlarms;
+  var nma, fixture, dom, db;
+  var ActiveAlarm, AlarmList, Alarm, Database;
 
   suiteSetup(function(done) {
     testRequire([
-        'alarm_list',
+        'active_alarm',
         'alarm',
-        'mocks/mock_moz_alarm',
-        'mocks/mock_navigator_mozl10n'
+        'alarm_list',
+        'mocks/mock_moz_alarm'
       ], {
-        mocks: ['alarm_manager', 'alarmsdb', 'banner']
+        mocks: ['alarm_manager', 'banner', 'database', 'l10n']
       },
-      function(alarmList, alarm, mockMozAlarms, mockL10n) {
+      function(activeAlarm, alarm, alarmList, mockMozAlarms) {
         AlarmList = alarmList;
         loadBodyHTML('/index.html');
         AlarmList.init();
         Alarm = alarm;
-        nma = navigator.mozAlarms;
-        nml = navigator.mozL10n;
-        navigator.mozAlarms = mockMozAlarms;
-        navigator.mozL10n = mockL10n;
+        ActiveAlarm = activeAlarm;
+
+        navigator.mozAlarms = new mockMozAlarms.MockMozAlarms(
+          ActiveAlarm.handler
+        );
+
         done();
       }
     );
   });
 
   suiteTeardown(function() {
-    navigator.mozAlarms = nma;
-    navigator.mozL10n = nml;
+    navigator.mozAlarms = nativeMozAlarms;
   });
 
   setup(function() {

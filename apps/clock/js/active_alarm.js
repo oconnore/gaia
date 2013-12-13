@@ -121,18 +121,20 @@ define('active_alarm', function(require) {
       var id = message.data.id;
       var date = message.date;
       var type = message.data.type;
+      if (alarmTypes.indexOf(type) !== -1) {
+        this.alarmHandler(message, done);
+      } else if (timerTypes.indexOf(type) !== -1) {
+        this.timerHandler(message, done);
+      }
+    }.bind(this));
+  },
 
-      // Unlock the CPU when these functions have been called
-      var finalizer = Utils.async.namedParallel([
-        'onReschedule',
-        'onReceivedAlarm'
-      ], function(err) {
-        AlarmList.refresh();
-        AlarmManager.updateAlarmStatusBar();
-        done();
-      });
+  alarmHandler: function aac_alarmHandler(message, done) {
+    // receive and parse the alarm id from the message
+    var id = message.data.id;
+    var type = message.data.type;
 
-      AlarmsDB.getAlarm(id, function aac_gotAlarm(err, alarm) {
+      Alarm.db.request(id, function aac_gotAlarm(err, alarm) {
         if (err) {
           done();
           return;

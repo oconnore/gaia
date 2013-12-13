@@ -2,7 +2,7 @@ define('timer', function(require) {
 'use strict';
 
 var Emitter = require('emitter');
-var asyncStorage = require('shared/js/async_storage');
+var Database = require('database').Database;
 var Utils = require('utils');
 var storeName = 'timers';
 var timer = null;
@@ -45,6 +45,20 @@ function Timer(opts) {
   }, opts);
 }
 
+/**
+ * request - get the persisted Timer object.
+ *
+ * @param {function} [callback] - called with (err, timer).
+ * @return {object} - object representation of this Timer.
+ */
+Timer.request = function timerGet(callback) {
+  var db = Database.singleton({ name: 'clock-app' });
+  // there is only one timer, request the 0 id.
+  db.request(storeName, 0, function(err, value) {
+    callback && callback(err, !err && new Timer(value));
+  });
+};
+
 Timer.prototype = Object.create(Emitter.prototype);
 Timer.prototype.constructor = Timer;
 
@@ -54,9 +68,11 @@ Timer.prototype.constructor = Timer;
  * @param {function} [callback] - called with (err, timer_raw).
  */
 Timer.request = function timerRequest(callback) {
-  asyncStorage.getItem('active_timer', function(obj) {
-    callback && callback(null, obj || null);
-  });
+  var db = Database.singleton({ name: 'clock-app' });
+  // there is only one timer, save to the 0 id.
+  db.request(storeName, 0, function(err, obj) {
+    callback && callback(err, obj || null);
+  }.bind(this));
 };
 
 /**
@@ -108,8 +124,10 @@ Timer.prototype.toSerializable = function timerToSerializable() {
  *                                has been saved.
  */
 Timer.prototype.save = function timerSave(callback) {
-  asyncStorage.setItem('active_timer', this.toSerializable(), function() {
-    callback && callback(null, this);
+  var db = Database.singleton({ name: 'clock-app' });
+  // there is only one timer, save to the 0 id.
+  db.put(storeName, this.toSerializable(), 0, function(err) {
+    callback && callback(err, this);
   }.bind(this));
 };
 

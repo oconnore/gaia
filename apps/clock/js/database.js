@@ -6,6 +6,11 @@ define(function(require, exports) {
   // ===========================================================
   // SchemaVersion Object
 
+  var getlatestinc = 1;
+
+  var P = 0;
+  var queue = [];
+
   var schemaVersions = new Map();
   var schemaVersionNamedRetrieval = new Map();
 
@@ -33,6 +38,7 @@ define(function(require, exports) {
      *
      * References to SchemaVersion's are maintained automatically
      */
+    Utils.debug('inside constructor');
     this.name = databaseName;
     this.version = version;
     Utils.extend(this, {
@@ -42,6 +48,7 @@ define(function(require, exports) {
     }, options);
     addSchemaVersion(this);
     schemaVersions.set(this, true);
+    Utils.debug('leaving constructor');
   }
 
   SchemaVersion.noop = function(transaction, callback) {
@@ -157,17 +164,25 @@ define(function(require, exports) {
      *            that define the database Schemas. These will be lazy
      *            loaded when the effective version !== the source version.
      */
+    console.trace();
+    Utils.debug('Database options are', options);
     Utils.extend(this, {
       initializers: [],
       upgraders: [],
-      downgraders: []
+      downgraders: [],
+      schemas: []
     }, options);
+    this.memoizedVersion = null;
+    Utils.debug('Database schemas are', this.schemas);
   }
 
   // ===========================================================
-  // Database Singletons
+  // Memoized Calls
 
-  var databaseSingletons = new Map();
+  var memoizedVersion = new Map();
+
+  // ===========================================================
+  // Database Singletons
 
   Database.singleton = Utils.singleton(Database, function(map, args) {
     return [args[0].name, map.get(args[0].name)];
@@ -229,6 +244,10 @@ define(function(require, exports) {
         callback = arguments[1];
       }
       this.requestMutatorTransaction(function(err, transaction) {
+        if (err) {
+          callback && callback(err);
+          return;
+        }
         var db = transaction.db;
         if (Array.prototype.indexOf.call(db.objectStoreNames,
           this.effectiveVersionName) !== -1) {
@@ -260,34 +279,82 @@ define(function(require, exports) {
         databaseName = this.name;
         callback = arguments[0];
       }
+      if (memoizedVersion.has(databaseName)) {
+        var memo = memoizedVersion.get(databaseName);
+        var aborting = false;
+        if (memo[0] === 0) {
+          memoizedVersion.delete(databaseName);
+          this.getLatestVersion(databaseName, callback);
+          return;
+        }
+        var req = indexedDB.open(databaseName, memo[0]);
+        req.onsuccess = function(ev) {
+          req.result.close();
+          if (callback) {
+            callback.apply(null, [null].concat(memo));
+          }
+        };
+        req.onupgradeneeded = (function(ev) {
+          aborting = true;
+          ev.target.transaction.abort();
+          memoizedVersion.delete(databaseName);
+          this.getLatestVersion(databaseName, callback);
+        }).bind(this);
+        req.onerror = (function(ev) {
+          ev.preventDefault();
+          if (!aborting) {
+            memoizedVersion.delete(databaseName);
+            this.getLatestVersion(databaseName, callback);
+          }
+        }).bind(this);
+        return;
+      }
+      var calln = getlatestinc++;
       var ignoreError = false;
 
       // Force an `onupgradeneeded` event so that we can query for the
       // effective version number. The request will be aborted in order
       // to prevent the request's side effects on the database.
-      var req = indexedDB.open(databaseName, Math.pow(2, 53) - 1);
+      var req;
+      try {
+        req = indexedDB.open(databaseName, Math.pow(2, 53) - 1);
+      } catch (err) { }
       var getEffective = (function(openEvent, transaction, callback) {
         var upgrade = transaction.mode === 'versionchange';
         var db = transaction.db;
         db.onversonchange = function(ev) {
+          memoizedVersion.delete(databaseName);
           db.close();
         };
         var calloutAndCleanup = function(err, effective) {
-          try {
-            callback && callback(err,
-              upgrade ? openEvent.oldVersion : Math.pow(2, 53) - 1,
-              err !== null ? 0 : effective);
-          } finally {
-            db.close();
-            ignoreError = true;
-            transaction.abort();
+          try { db.close(); } catch (e) {}
+          try { transaction.abort(); } catch (e) {}
+          ignoreError = true;
+          var versionNumber, effectiveVersion;
+          if (upgrade) {
+            versionNumber = openEvent.oldVersion;
+          } else {
+           versionNumber = Math.pow(2, 53) - 1;
           }
+          effectiveVersion = err !== null ? 0 : effective;
+          if (!err) {
+            memoizedVersion.set(databaseName,
+                                [versionNumber, effectiveVersion]);
+          }
+          callback && callback(err, versionNumber, effectiveVersion);
         };
         if ((!upgrade || openEvent.oldVersion > 0) &&
             Array.prototype.indexOf.call(db.objectStoreNames,
                                          this.effectiveVersionName) !== -1) {
-          var ev = transaction.objectStore(this.effectiveVersionName);
-          var req = ev.get(0);
+          var ev, req;
+          try {
+            ev = transaction.objectStore(this.effectiveVersionName);
+            req = ev.get(0);
+          } catch (err) {
+            db.close();
+            callback && callback(err);
+            return;
+          }
           req.onsuccess = req.onerror = function(ev) {
             calloutAndCleanup(req.error,
               req.error === null ? req.result.number : 0);
@@ -313,7 +380,7 @@ define(function(require, exports) {
         getEffective(ev, trans, callback);
       }).bind(this);
 
-      req.onerror = req.onblocked = function(ev) {
+      req.onerror = function(ev) {
         ev.preventDefault();
         // Every aborted transaction triggers an `onerror` event. Because we
         // are intentionally aborting the "open" transaction in order to avoid
@@ -323,6 +390,9 @@ define(function(require, exports) {
           callback && callback(
             new Error('Error retrieving indexedDB version #'));
         }
+      };
+      req.onblocked = function(ev) {
+        ev.preventDefault();
       };
     },
 
@@ -336,17 +406,31 @@ define(function(require, exports) {
        * @param {function} callback - called after all
        *                              schemas are loaded.
        *
-       * Lazily loads schemas and then calls the callback.
+       * Loads schemas and then calls the callback.
        * SchemaVersions that were defined with a different
        * databaseName must be loaded manually.
        */
-      LazyLoader.load(this.schemas, function() {
-        SchemaVersion.getSchemaVersions(this.name).forEach(
-          function(el) {
+      Utils.debug('DB 425 schemas are', this.schemas);
+      var afterLoad = (function afterLoad() {
+        Utils.debug('afterLoad called');
+        SchemaVersion.getSchemaVersions(this.name).forEach(function(el) {
+          Utils.debug('registering', this.name, el);
           el.register(this);
         }.bind(this));
         callback && callback();
-      }.bind(this));
+      }).bind(this);
+      if (Array.isArray(this.schemas) && this.schemas.length > 0) {
+        Utils.debug('this.schemas is being loaded');
+        if (typeof require === 'function' && this.schemas) {
+          Utils.debug('requirejs type', require);
+          require(this.schemas || [], afterLoad);
+        } else if (typeof LazyLoader !== 'undefined') {
+          Utils.debug('lazyloader type', LazyLoader.load);
+          LazyLoader.load(this.schemas || [], afterLoad);
+        }
+      } else {
+        afterLoad();
+      }
     },
 
     initialize: function(newVersion, callback) {
@@ -358,6 +442,10 @@ define(function(require, exports) {
        *                              the database is initialized.
        */
       this.requestMutatorTransaction(function(err, transaction) {
+        if (err) {
+          callback && callback(err);
+          return;
+        }
         var db = transaction.db;
         var objectStores = db.objectStoreNames;
         for (var i = 0; i < objectStores.length; i++) {
@@ -385,10 +473,17 @@ define(function(require, exports) {
        * @param {function} callback - function to be called with the
        *                              versionchange transaction.
        */
+      memoizedVersion.delete(this.name);
+      var calln = getlatestinc++;
       this.getLatestVersion(this.name, function(err, version, effective) {
+        if (err) {
+          callback && callback(err);
+          return;
+        }
         var req = indexedDB.open(this.name, version + 1);
         req.onupgradeneeded = function(ev) {
           req.result.onversionchange = function(ev) {
+            memoizedVersion.delete(this.name);
             req.result.close();
           };
           callback && callback(null, ev.target.transaction, req);
@@ -462,8 +557,6 @@ define(function(require, exports) {
             callback && callback(err);
           });
         } else {
-          console.log('Upgrade error:', err.message, err.fileName,
-            err.lineNumber);
           // We can't do anything useful here, so start from scratch,
           // destroying user data
           this.initialize(newVersion, function(err) {
@@ -496,7 +589,7 @@ define(function(require, exports) {
       last(null);
     },
 
-    connect: function(callback) {
+    connect: function(callback, use_the_force) {
       /**
        * connect
        *
@@ -508,17 +601,45 @@ define(function(require, exports) {
        * This is the primary API for the database object. Most
        * other methods on Database are not relevant in typical usage.
        */
+      var calln = getlatestinc++;
+      if (!use_the_force) {
+        P++;
+      }
+      if (!use_the_force && P > 1) {
+        Utils.debug('queueing a connection', P);
+        queue.push(callback);
+        return;
+      }
+      var realCallback = callback;
+      callback = (function() {
+        P--;
+        Utils.debug('finished building a connection', P);
+        if (P > 0 && queue.length > 0) {
+          setTimeout(this.connect.bind(this, queue.shift(), true), 0);
+        }
+        realCallback && realCallback.apply(null,
+          Array.prototype.slice.call(arguments));
+      }).bind(this);
       var opener = (function(actualVersion) {
         var req = indexedDB.open(this.name, actualVersion);
+        var invalidatingCache = false;
         req.onsuccess = function(event) {
           req.result.onversionchange = function(event) {
+            memoizedVersion.delete(databaseName);
             req.result.close();
           };
           callback && callback(null, req.result);
         };
         req.onerror = (function(event) {
           event.preventDefault();
-          callback && callback(req.error);
+          if (!invalidatingCache) {
+            callback && callback(req.error);
+          }
+        }).bind(this);
+        req.onupgradeneeded = (function(event) {
+          req.result.close();
+          event.target.transaction.abort();
+          this.connect(callback, true);
         }).bind(this);
         req.onblocked = function(event) {
           callback && callback(new Error('blocked'));
@@ -535,6 +656,7 @@ define(function(require, exports) {
               }
               // The upgrade function has changed our version number,
               // get the latest
+              memoizedVersion.delete(this.name);
               this.getLatestVersion(this.name,
                 function(err, version, effective) {
                 opener.call(this, version);
@@ -546,6 +668,156 @@ define(function(require, exports) {
           opener.call(this, version);
         }
       }.bind(this));
+    },
+
+    // ===========================================================
+    // Simple Operations
+
+    alist: function(objectStore, iter, callback) {
+      /**
+       * alist - retrieve an array of [key, value] pairs. For example:
+       *         { 'one': 1, 'two': 2, 'three': 3 } ->
+       *           [ ['one', 1], ['two', 2], ['three', 3] ]
+       *
+       * @param {string} objectStore - name of object store to query.
+       * @param {string} iter - iterate direction: (next|prev|nextUnique|
+       *                        prevUnique).
+       * @param {function} callback - callback to call with (err, list).
+       */
+      if (arguments.length === 2 && typeof arguments[1] === 'function') {
+        iter = 'next';
+        callback = arguments[1];
+      }
+      if (!iter) {
+        iter = 'next';
+      }
+      var ret = [];
+      var generator = Utils.async.generator(function(err) {
+        callback && callback(null, ret);
+      });
+      var done = generator();
+      this.connect(function(err, conn) {
+        if (err) {
+          callback && callback(err);
+          return;
+        }
+        var trans = conn.transaction(objectStore, 'readonly');
+        var st = trans.objectStore(objectStore);
+        var curreq = st.openCursor(null, iter);
+        curreq.onsuccess = function(ev) {
+          var cursor = curreq.result;
+          if (cursor) {
+            var cb = generator();
+            var getreq = st.get(cursor.key);
+            getreq.onsuccess = function(ev) {
+              ret.push([cursor.key, getreq.result]);
+              cb();
+            };
+            getreq.onerror = function(ev) {
+              cb(getreq.error);
+            };
+            cursor.continue();
+          } else {
+            done();
+          }
+        };
+        curreq.onerror = function(ev) {
+          callback && callback(getreq.error);
+        };
+      });
+    },
+
+    request: function(objectStore, key, callback) {
+      /**
+       * request - request the object stored under a certain key.
+       *
+       * @param {string} objectStore - name of the object store.
+       * @param {`valid-key`} key - a key to lookup in the database.
+       * @param {function} callback - a callback to call with (err, obj).
+       */
+      this.connect(function(err, conn) {
+        if (err) {
+          callback && callback(err);
+          return;
+        }
+        var trans = conn.transaction(objectStore, 'readonly');
+        var st = trans.objectStore(objectStore);
+        var getreq = st.get(key);
+        getreq.onsuccess = function(ev) {
+          callback && callback(null, getreq.result);
+        };
+        getreq.onerror = function(ev) {
+          callback && callback(getreq.error);
+        };
+      });
+    },
+
+    put: function(objectStore, value, key, callback) {
+      /**
+       * put - store a value to the database.
+       *
+       * @param {string} objectStore - object store name.
+       * @param {`structured-cloneable`} value - a cloneable object.
+       * @param {`valid-key`} [key] - a key to store the object under. When
+       *                              the object store defines a keyPath,
+       *                              or the object store uses autoincrement
+       *                              keys, the key is optional.
+       * @param {function} callback - a function to call with error or null.
+       */
+      Utils.debug('database.put entered');
+      var putcall = [value, key];
+      if (arguments.length === 3 && typeof arguments[2] === 'function') {
+        objectStore = arguments[0];
+        value = arguments[1];
+        callback = arguments[2];
+        key = null;
+        putcall.pop();
+      }
+      Utils.debug('database.put called', objectStore, value, key, callback);
+      this.connect(function(err, conn) {
+        Utils.debug('database.put connected', err, conn);
+        if (err) {
+          callback && callback(err);
+          return;
+        }
+        var trans = conn.transaction(objectStore, 'readwrite');
+        var st = trans.objectStore(objectStore);
+        Utils.debug('database.put putreq', st, putcall);
+        var putreq = IDBObjectStore.prototype.put.apply(st, putcall);
+        putreq.onsuccess = function(ev) {
+          Utils.debug('database.put putreq onsuccess');
+          if (st.keyPath) {
+            value[st.keyPath] = putreq.result;
+          }
+          callback && callback(null, value);
+        };
+        putreq.onerror = function(ev) {
+          Utils.debug('database.put putreq onerror');
+          callback && callback(putreq.error);
+        };
+      });
+    },
+
+    delete: function(objectStore, key, callback) {
+      /**
+       * delete - delete the object stored under a certain key.
+       *
+       * @param {string} objectStore - name of the object store.
+       * @param {`valid-key`} key - a key to lookup in the database.
+       * @param {function} callback - a callback to call with (err).
+       */
+      this.connect(function(err, conn) {
+        if (err) {
+          callback && callback(err);
+          return;
+        }
+        var trans = conn.transaction(objectStore, 'readwrite');
+        var st = trans.objectStore(objectStore);
+        var delreq = st.delete(key);
+        delreq.onsuccess = delreq.error = function(ev) {
+          callback && callback(delreq.error || null);
+        };
+      });
     }
   };
 
